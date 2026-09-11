@@ -10,6 +10,7 @@ import os
 import re
 import asyncio
 import logging
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -144,6 +145,11 @@ def get_ydl_opts(video: bool = False) -> dict:
         "skip_download": True,
         "extract_flat": False,
         "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "mweb"],
+            }
+        },
     }
     if _cookie_path and os.path.exists(_cookie_path):
         opts["cookiefile"] = _cookie_path
@@ -412,6 +418,11 @@ def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], O
         "overwrites": True,
         "nocheckcertificate": True,
         "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "mweb"],
+            }
+        },
     }
     if _cookie_path and os.path.exists(_cookie_path):
         base_opts["cookiefile"] = _cookie_path
@@ -444,6 +455,26 @@ def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], O
     m4a_cand = DOWNLOAD_DIR / f"{video_id}.m4a"
     if m4a_cand.exists() and m4a_cand.stat().st_size > 1000:
         return str(m4a_cand), None
+
+    # If YouTube sent an mp4 (format 18 fallback), extract pure webm audio via ffmpeg
+    if not video:
+        mp4_cand = DOWNLOAD_DIR / f"{video_id}.mp4"
+        if mp4_cand.exists() and mp4_cand.stat().st_size > 1000:
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(mp4_cand), "-vn", "-c:a", "libopus", "-b:a", "128k", str(webm_cand)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                try:
+                    mp4_cand.unlink()
+                except Exception:
+                    pass
+                if webm_cand.exists() and webm_cand.stat().st_size > 1000:
+                    return str(webm_cand), None
+            except Exception as ex:
+                logger.warning("ffmpeg audio extraction to webm failed: %s", ex)
 
     # 3. Fallback: any downloaded file for this video_id
     for cand in DOWNLOAD_DIR.glob(f"{video_id}.*"):
