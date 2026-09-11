@@ -264,13 +264,23 @@ async def start_telegram_bot():
         dp_instance = Dispatcher()
         dp_instance.include_router(router)
 
-        # Delete any pending updates
+        # Delete any pending updates and wait briefly for previous container to release polling
         await bot_instance.delete_webhook(drop_pending_updates=True)
         bot_info = await bot_instance.get_me()
         logger.info("Telegram Bot started as @%s", bot_info.username)
 
-        # Start polling as a background task
-        bot_task = asyncio.create_task(dp_instance.start_polling(bot_instance))
+        async def _run_polling():
+            while True:
+                try:
+                    await dp_instance.start_polling(bot_instance, handle_signals=False)
+                    break
+                except asyncio.CancelledError:
+                    break
+                except Exception as ex:
+                    logger.warning("Telegram polling notice: %s (waiting 3s for old instance)", ex)
+                    await asyncio.sleep(3)
+
+        bot_task = asyncio.create_task(_run_polling())
     except Exception as exc:
         logger.error("Failed to start Telegram Bot: %s", exc)
 

@@ -178,7 +178,7 @@ async def root():
     return {
         "status": "online",
         "service": "AnonXStreamAPI",
-        "version": "2.0.0",
+        "version": "2.2.0-webm-priority",
         "master_auth_enabled": bool(MASTER_API_KEY),
         "mongodb_connected": db_stats.get("connected", False),
         "total_active_keys": db_stats.get("active_keys", 0),
