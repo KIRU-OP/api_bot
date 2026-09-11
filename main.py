@@ -429,13 +429,18 @@ def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], O
     if video:
         ydl_opts = {
             **base_opts,
-            "format": "(bestvideo[height<=?720][width<=?1280][ext=mp4])+(bestaudio)",
+            "format": "(bestvideo[height<=?720][width<=?1280][ext=mp4])+(bestaudio)/best",
             "merge_output_format": "mp4",
         }
     else:
         ydl_opts = {
             **base_opts,
-            "format": "bestaudio[ext=webm][acodec=opus]/bestaudio/best",
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "m4a",
+                "preferredquality": "128",
+            }],
         }
 
     try:
