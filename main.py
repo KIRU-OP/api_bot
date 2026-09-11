@@ -144,11 +144,6 @@ def get_ydl_opts(video: bool = False) -> dict:
         "skip_download": True,
         "extract_flat": False,
         "remote_components": ["ejs:github"],
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["web", "android"],
-            }
-        },
     }
     if _cookie_path and os.path.exists(_cookie_path):
         opts["cookiefile"] = _cookie_path
@@ -156,7 +151,7 @@ def get_ydl_opts(video: bool = False) -> dict:
     if video:
         opts["format"] = "best[ext=mp4]/best"
     else:
-        opts["format"] = "bestaudio/best"
+        opts["format"] = "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best"
 
     return opts
 
@@ -417,11 +412,6 @@ def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], O
         "overwrites": True,
         "nocheckcertificate": True,
         "remote_components": ["ejs:github"],
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["web", "android"],
-            }
-        },
     }
     if _cookie_path and os.path.exists(_cookie_path):
         base_opts["cookiefile"] = _cookie_path
@@ -435,12 +425,7 @@ def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], O
     else:
         ydl_opts = {
             **base_opts,
-            "format": "bestaudio/best",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-                "preferredquality": "128",
-            }],
+            "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
         }
 
     try:
@@ -450,9 +435,17 @@ def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], O
         logger.error("Download failed for %s: %s", video_id, e)
         return None, str(e)
 
-    if target_path.exists() and target_path.stat().st_size > 1000:
-        return str(target_path), None
+    # 1. First priority: webm
+    webm_cand = DOWNLOAD_DIR / f"{video_id}.webm"
+    if webm_cand.exists() and webm_cand.stat().st_size > 1000:
+        return str(webm_cand), None
 
+    # 2. Second priority: m4a
+    m4a_cand = DOWNLOAD_DIR / f"{video_id}.m4a"
+    if m4a_cand.exists() and m4a_cand.stat().st_size > 1000:
+        return str(m4a_cand), None
+
+    # 3. Fallback: any downloaded file for this video_id
     for cand in DOWNLOAD_DIR.glob(f"{video_id}.*"):
         if cand.is_file() and cand.stat().st_size > 1000:
             return str(cand), None
@@ -485,6 +478,7 @@ async def download_track(
         path=file_path,
         media_type="application/octet-stream",
         filename=filename,
+        headers={"X-Filename": filename},
     )
 
 
