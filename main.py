@@ -142,9 +142,10 @@ def get_ydl_opts(video: bool = False) -> dict:
         "geo_bypass": True,
         "skip_download": True,
         "extract_flat": False,
+        "remote_components": ["ejs:github"],
         "extractor_args": {
             "youtube": {
-                "player_client": ["ios", "web", "android"],
+                "player_client": ["web", "android"],
             }
         },
     }
@@ -154,7 +155,7 @@ def get_ydl_opts(video: bool = False) -> dict:
     if video:
         opts["format"] = "best[ext=mp4]/best"
     else:
-        opts["format"] = "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best"
+        opts["format"] = "bestaudio/best"
 
     return opts
 
