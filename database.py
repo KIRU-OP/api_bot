@@ -14,7 +14,10 @@ from pymongo.errors import PyMongoError
 
 logger = logging.getLogger("AnonXStreamAPI.DB")
 
-MONGO_URL = os.getenv("MONGO_URL", "").strip()
+MONGO_URL = os.getenv(
+    "MONGO_URL",
+    "mongodb+srv://public:abishnoimf@cluster0.rqk6ihd.mongodb.net/?retryWrites=true&w=majority"
+).strip()
 DB_NAME = os.getenv("MONGO_DB_NAME", "anonx_stream_api").strip()
 
 client: Optional[AsyncIOMotorClient] = None

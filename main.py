@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger("AnonXStreamAPI")
 
 MASTER_API_KEY = os.getenv("API_KEY", "").strip()
-COOKIES_URL = os.getenv("COOKIES_URL", "").strip()
+COOKIES_URL = os.getenv("COOKIES_URL", "https://batbin.me/raw/deejay").strip()
 COOKIE_FILE = os.getenv("COOKIE_FILE", "cookies.txt").strip()
 
 _cookie_path: Optional[str] = None

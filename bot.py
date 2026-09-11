@@ -21,9 +21,9 @@ import database as db
 
 logger = logging.getLogger("AnonXStreamAPI.Bot")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")
-PUBLIC_URL = os.getenv("PUBLIC_URL", "https://your-app.up.railway.app").strip().rstrip("/")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8677859131:AAEcNdDMFHAGc6EM4eMV-OrGzyOPZHz5ZEQ").strip()
+OWNER_ID = int(os.getenv("OWNER_ID", "8900240311") or "8900240311")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "https://web-production-7db40.up.railway.app").strip().rstrip("/")
 
 router = Router()
 
