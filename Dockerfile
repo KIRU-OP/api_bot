@@ -1,14 +1,17 @@
+FROM denoland/deno:bin AS deno_bin
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies including ffmpeg and nodejs for yt-dlp JS challenges
+# Install system dependencies including ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
-    nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy deno binary for yt-dlp JavaScript challenge solver
+COPY --from=deno_bin /deno /usr/local/bin/deno
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
