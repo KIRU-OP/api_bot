@@ -4,3 +4,6 @@ yt-dlp>=2025.1.15
 aiohttp>=3.10.0
 requests>=2.32.0
 python-dotenv>=1.0.1
+aiogram>=3.13.0
+motor>=3.6.0
+pymongo>=4.9.0

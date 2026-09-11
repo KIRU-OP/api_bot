@@ -1,6 +1,9 @@
 """
 AnonXStreamAPI - High Performance YouTube Streaming Microservice
-Designed for deployment on Railway to bypass YouTube datacenter 403 blocks for Telegram Music Bots.
+Features:
+- FastAPI Streaming & Extraction Engine
+- Telegram Bot for instant API Key generation & management
+- MongoDB Database integration for dynamic key validation and analytics
 """
 
 import os
@@ -17,6 +20,9 @@ from fastapi import FastAPI, HTTPException, Header, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+import database as db
+from bot import start_telegram_bot, stop_telegram_bot
+
 load_dotenv()
 
 logging.basicConfig(
@@ -25,7 +31,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AnonXStreamAPI")
 
-API_KEY = os.getenv("API_KEY", "").strip()
+MASTER_API_KEY = os.getenv("API_KEY", "").strip()
 COOKIES_URL = os.getenv("COOKIES_URL", "").strip()
 COOKIE_FILE = os.getenv("COOKIE_FILE", "cookies.txt").strip()
 
@@ -57,16 +63,27 @@ async def fetch_cookies():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 1. Initialize MongoDB
+    await db.init_db()
+
+    # 2. Fetch/load cookies
     await fetch_cookies()
+
+    # 3. Start Telegram Bot if BOT_TOKEN is present
+    await start_telegram_bot()
+
     logger.info("AnonXStreamAPI started successfully.")
     yield
+
+    # Shutdown
+    await stop_telegram_bot()
     logger.info("Shutting down AnonXStreamAPI...")
 
 
 app = FastAPI(
     title="AnonXStreamAPI",
-    description="YouTube Streaming & Extraction Microservice for Telegram Music Bots",
-    version="1.0.0",
+    description="YouTube Streaming Microservice with Telegram Key Manager and MongoDB",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -79,16 +96,31 @@ app.add_middleware(
 )
 
 
-def verify_auth(x_api_key: Optional[str] = Header(None), api_key: Optional[str] = Query(None)):
-    if not API_KEY:
-        return True  # No API_KEY configured on server; open mode
-    client_key = x_api_key or api_key
-    if not client_key or client_key.strip() != API_KEY:
+async def verify_auth(x_api_key: Optional[str] = Header(None), api_key: Optional[str] = Query(None)):
+    client_key = (x_api_key or api_key or "").strip()
+
+    # If neither master API_KEY nor MongoDB is configured, open access
+    if not MASTER_API_KEY and not db.is_connected():
+        return True
+
+    if not client_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key. Provide via 'X-API-Key' header or 'api_key' query parameter.",
+            detail="Missing API key. Provide via 'X-API-Key' header or 'api_key' query parameter.",
         )
-    return True
+
+    # 1. Check against Master API Key
+    if MASTER_API_KEY and client_key == MASTER_API_KEY:
+        return True
+
+    # 2. Check against MongoDB Database dynamic keys
+    if db.is_connected() and await db.verify_api_key(client_key):
+        return True
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or deactivated API key. Please generate a new key using the Telegram Bot.",
+    )
 
 
 def get_ydl_opts(video: bool = False) -> dict:
@@ -124,11 +156,14 @@ def format_duration(seconds: Optional[int]) -> str:
 
 @app.get("/")
 async def root():
+    db_stats = await db.get_stats()
     return {
         "status": "online",
         "service": "AnonXStreamAPI",
-        "version": "1.0.0",
-        "auth_enabled": bool(API_KEY),
+        "version": "2.0.0",
+        "master_auth_enabled": bool(MASTER_API_KEY),
+        "mongodb_connected": db_stats.get("connected", False),
+        "total_active_keys": db_stats.get("active_keys", 0),
         "cookies_loaded": bool(_cookie_path and os.path.exists(_cookie_path)),
     }
 
@@ -137,11 +172,10 @@ async def root():
 async def search(
     query: str = Query(..., description="Song name or YouTube URL to search"),
     video: bool = Query(False, description="Search video format instead of audio"),
-    _: bool = Query(True, include_in_schema=False),
     x_api_key: Optional[str] = Header(None),
     api_key: Optional[str] = Query(None),
 ):
-    verify_auth(x_api_key, api_key)
+    await verify_auth(x_api_key, api_key)
 
     if not query.strip():
         raise HTTPException(status_code=400, detail="Query parameter cannot be empty.")
@@ -195,7 +229,7 @@ async def stream_info(
     x_api_key: Optional[str] = Header(None),
     api_key: Optional[str] = Query(None),
 ):
-    verify_auth(x_api_key, api_key)
+    await verify_auth(x_api_key, api_key)
 
     target_id = id or query
     if not target_id or not target_id.strip():
@@ -233,9 +267,10 @@ async def stream_info(
     v_id = entry.get("id", "")
     duration_sec = int(entry.get("duration", 0) or 0)
 
-    # Base URL of current API deployment
     base_url = str(request.base_url).rstrip("/")
-    auth_query = f"?api_key={API_KEY}" if API_KEY else ""
+    # Append the client key so downstream player can fetch audio stream cleanly
+    used_key = (x_api_key or api_key or MASTER_API_KEY or "").strip()
+    auth_query = f"?api_key={used_key}" if used_key else ""
     proxied_audio_url = f"{base_url}/audio/{v_id}{auth_query}"
 
     return {
@@ -261,7 +296,7 @@ async def proxy_audio_stream(
     Direct proxy audio stream from Railway to client (ffmpeg / PyTgCalls on VPS).
     Bypasses YouTube 403 Forbidden because connection to YouTube originates from Railway IP.
     """
-    verify_auth(x_api_key, api_key)
+    await verify_auth(x_api_key, api_key)
 
     if not re.match(r"^[A-Za-z0-9_-]{11}$", video_id):
         raise HTTPException(status_code=400, detail="Invalid YouTube video ID.")
@@ -311,10 +346,15 @@ async def reload_cookies(
     x_api_key: Optional[str] = Header(None),
     api_key: Optional[str] = Query(None),
 ):
-    verify_auth(x_api_key, api_key)
+    await verify_auth(x_api_key, api_key)
     await fetch_cookies()
     return {
         "status": True,
         "message": "Cookies reloaded successfully",
         "cookies_loaded": bool(_cookie_path and os.path.exists(_cookie_path)),
     }
+
+
+@app.get("/stats")
+async def get_stats():
+    return await db.get_stats()
