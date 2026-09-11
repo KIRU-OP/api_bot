@@ -358,3 +358,15 @@ async def reload_cookies(
 @app.get("/stats")
 async def get_stats():
     return await db.get_stats()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    raw_port = os.getenv("PORT", "8000")
+    try:
+        port = int(raw_port)
+    except ValueError:
+        port = 8000
+    logger.info("Starting uvicorn on 0.0.0.0:%d", port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
+
