@@ -11,6 +11,7 @@ import re
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -18,7 +19,7 @@ import yt_dlp
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import database as db
 from bot import start_telegram_bot, stop_telegram_bot
@@ -368,6 +369,117 @@ async def proxy_audio_stream(
             "Accept-Ranges": "bytes",
             "Cache-Control": "no-cache",
         },
+    )
+
+
+DOWNLOAD_DIR = Path("downloads")
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cleanup_downloads(max_files: int = 40):
+    """Keep downloaded media directory clean by removing oldest files."""
+    try:
+        files = sorted(DOWNLOAD_DIR.glob("*"), key=lambda p: p.stat().st_mtime)
+        if len(files) > max_files:
+            for f in files[: len(files) - max_files]:
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("Cache cleanup error: %s", e)
+
+
+def download_media(video_id: str, video: bool = False) -> tuple[Optional[str], Optional[str]]:
+    """Download audio or video track locally using Railway IP and cookies."""
+    cleanup_downloads()
+    target_ext = "mp4" if video else "webm"
+    target_path = DOWNLOAD_DIR / f"{video_id}.{target_ext}"
+
+    # Check if exact file exists
+    if target_path.exists() and target_path.stat().st_size > 1000:
+        return str(target_path), None
+
+    # Check for alternate audio formats if not video
+    if not video:
+        for ext in ["webm", "m4a", "opus", "mp3"]:
+            cand = DOWNLOAD_DIR / f"{video_id}.{ext}"
+            if cand.exists() and cand.stat().st_size > 1000:
+                return str(cand), None
+
+    target_url = f"https://www.youtube.com/watch?v={video_id}"
+    base_opts = {
+        "outtmpl": str(DOWNLOAD_DIR / f"%(id)s.%(ext)s"),
+        "quiet": True,
+        "noplaylist": True,
+        "geo_bypass": True,
+        "no_warnings": True,
+        "overwrites": True,
+        "nocheckcertificate": True,
+        "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "android"],
+            }
+        },
+    }
+    if _cookie_path and os.path.exists(_cookie_path):
+        base_opts["cookiefile"] = _cookie_path
+
+    if video:
+        ydl_opts = {
+            **base_opts,
+            "format": "(bestvideo[height<=?720][width<=?1280][ext=mp4])+(bestaudio)",
+            "merge_output_format": "mp4",
+        }
+    else:
+        ydl_opts = {
+            **base_opts,
+            "format": "bestaudio[ext=webm][acodec=opus]/bestaudio/best",
+        }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([target_url])
+    except Exception as e:
+        logger.error("Download failed for %s: %s", video_id, e)
+        return None, str(e)
+
+    if target_path.exists() and target_path.stat().st_size > 1000:
+        return str(target_path), None
+
+    for cand in DOWNLOAD_DIR.glob(f"{video_id}.*"):
+        if cand.is_file() and cand.stat().st_size > 1000:
+            return str(cand), None
+
+    return None, "File not found after yt-dlp execution."
+
+
+@app.get("/download/{video_id}")
+async def download_track(
+    video_id: str,
+    video: bool = Query(False, description="Download video instead of audio"),
+    x_api_key: Optional[str] = Header(None),
+    api_key: Optional[str] = Query(None),
+):
+    """
+    Download a track on Railway server and serve the binary file to VPS.
+    Bypasses YouTube datacenter 403 blocks because Railway downloads the file with cookies.
+    """
+    await verify_auth(x_api_key, api_key)
+
+    if not re.match(r"^[A-Za-z0-9_-]{11}$", video_id):
+        raise HTTPException(status_code=400, detail="Invalid YouTube video ID.")
+
+    file_path, err = await asyncio.to_thread(download_media, video_id, video)
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=500, detail=f"Failed to download track on Railway: {err}")
+
+    filename = os.path.basename(file_path)
+    return FileResponse(
+        path=file_path,
+        media_type="application/octet-stream",
+        filename=filename,
     )
 
 
