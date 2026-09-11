@@ -278,20 +278,20 @@ async def stream_info(
             try:
                 info = ydl.extract_info(target, download=False)
                 if not info:
-                    return None
+                    return None, "No info returned by yt-dlp"
                 if "entries" in info:
                     entries = [e for e in info["entries"] if e]
                     if not entries:
-                        return None
-                    return entries[0]
-                return info
+                        return None, "No entries found"
+                    return entries[0], None
+                return info, None
             except Exception as e:
                 logger.warning("yt-dlp stream extraction error: %s", e)
-                return None
+                return None, str(e)
 
-    entry = await asyncio.to_thread(_extract_stream)
+    entry, err_msg = await asyncio.to_thread(_extract_stream)
     if not entry:
-        raise HTTPException(status_code=404, detail="Failed to extract stream for given media.")
+        raise HTTPException(status_code=404, detail=f"Failed to extract stream for given media: {err_msg}")
 
     direct_url = entry.get("url")
     v_id = entry.get("id", "")
