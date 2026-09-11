@@ -142,6 +142,11 @@ def get_ydl_opts(video: bool = False) -> dict:
         "geo_bypass": True,
         "skip_download": True,
         "extract_flat": False,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["ios", "web", "android"],
+            }
+        },
     }
     if _cookie_path and os.path.exists(_cookie_path):
         opts["cookiefile"] = _cookie_path
@@ -194,7 +199,21 @@ async def search(
     search_target = clean_query if clean_query.startswith("http") else f"ytsearch1:{clean_query}"
 
     def _extract():
-        opts = get_ydl_opts(video=video)
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "nocheckcertificate": True,
+            "geo_bypass": True,
+            "extract_flat": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["ios", "web"],
+                }
+            },
+        }
+        if _cookie_path and os.path.exists(_cookie_path):
+            opts["cookiefile"] = _cookie_path
         with yt_dlp.YoutubeDL(opts) as ydl:
             try:
                 info = ydl.extract_info(search_target, download=False)
