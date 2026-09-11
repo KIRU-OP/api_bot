@@ -14,6 +14,7 @@ import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from difflib import SequenceMatcher
 
 import aiohttp
 import yt_dlp
@@ -178,7 +179,7 @@ async def root():
     return {
         "status": "online",
         "service": "AnonXStreamAPI",
-        "version": "2.3.0-deno-ready",
+        "version": "2.4.0-autoplay-ready",
         "master_auth_enabled": bool(MASTER_API_KEY),
         "mongodb_connected": db_stats.get("connected", False),
         "total_active_keys": db_stats.get("active_keys", 0),
@@ -199,38 +200,55 @@ async def search(
         raise HTTPException(status_code=400, detail="Query parameter cannot be empty.")
 
     clean_query = query.strip()
-    search_target = clean_query if clean_query.startswith("http") else f"ytsearch1:{clean_query}"
+    is_direct = clean_query.startswith("http") or bool(re.match(r"^[A-Za-z0-9_-]{11}$", clean_query))
 
-    def _extract():
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "nocheckcertificate": True,
-            "geo_bypass": True,
-            "extract_flat": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["ios", "web"],
-                }
-            },
-        }
-        if _cookie_path and os.path.exists(_cookie_path):
-            opts["cookiefile"] = _cookie_path
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            try:
-                info = ydl.extract_info(search_target, download=False)
-                if not info:
-                    return None
-                if "entries" in info:
-                    entries = [e for e in info["entries"] if e]
-                    if not entries:
+    if is_direct:
+        search_target = clean_query if clean_query.startswith("http") else f"https://www.youtube.com/watch?v={clean_query}"
+        def _extract():
+            opts = get_ydl_opts(video=video)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                try:
+                    info = ydl.extract_info(search_target, download=False)
+                    if not info:
                         return None
-                    return entries[0]
-                return info
-            except Exception as e:
-                logger.warning("yt-dlp search error: %s", e)
-                return None
+                    if "entries" in info:
+                        entries = [e for e in info["entries"] if e]
+                        return entries[0] if entries else None
+                    return info
+                except Exception as e:
+                    logger.warning("yt-dlp direct extract error: %s", e)
+                    return None
+    else:
+        search_target = f"ytsearch1:{clean_query}"
+        def _extract():
+            opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "nocheckcertificate": True,
+                "geo_bypass": True,
+                "extract_flat": True,
+                "remote_components": ["ejs:github"],
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["web", "mweb"],
+                    }
+                },
+            }
+            if _cookie_path and os.path.exists(_cookie_path):
+                opts["cookiefile"] = _cookie_path
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                try:
+                    info = ydl.extract_info(search_target, download=False)
+                    if not info:
+                        return None
+                    if "entries" in info:
+                        entries = [e for e in info["entries"] if e]
+                        return entries[0] if entries else None
+                    return info
+                except Exception as e:
+                    logger.warning("yt-dlp search error: %s", e)
+                    return None
 
     entry = await asyncio.to_thread(_extract)
     if not entry:
@@ -249,6 +267,99 @@ async def search(
         "thumbnail": entry.get("thumbnail") or f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg",
         "url": entry.get("webpage_url") or f"https://www.youtube.com/watch?v={v_id}",
         "view_count": entry.get("view_count", ""),
+    }
+
+
+@app.get("/autoplay/{video_id}")
+async def get_autoplay(
+    video_id: str,
+    history: Optional[str] = Query(None, description="Comma-separated list of previously played video IDs"),
+    video: bool = Query(False, description="Search video format instead of audio"),
+    x_api_key: Optional[str] = Header(None),
+    api_key: Optional[str] = Query(None),
+):
+    await verify_auth(x_api_key, api_key)
+
+    v_id = video_id.strip()
+    if not v_id:
+        raise HTTPException(status_code=400, detail="Video ID is required.")
+
+    hist_set = set(history.split(",")) if history else set()
+    hist_set.add(v_id)
+
+    def _extract_mix():
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "geo_bypass": True,
+            "nocheckcertificate": True,
+            "playlistend": 20,
+            "remote_components": ["ejs:github"],
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web", "mweb"],
+                }
+            },
+        }
+        if _cookie_path and os.path.exists(_cookie_path):
+            opts["cookiefile"] = _cookie_path
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            try:
+                return ydl.extract_info(f"https://www.youtube.com/watch?v={v_id}&list=RD{v_id}", download=False)
+            except Exception as e:
+                logger.warning("yt-dlp autoplay mix extraction error: %s", e)
+                return None
+
+    info = await asyncio.to_thread(_extract_mix)
+    if not info or "entries" not in info or not info["entries"]:
+        raise HTTPException(status_code=404, detail="No autoplay entries found for this video.")
+
+    current_title = next(
+        (e.get("title", "") for e in info["entries"] if e.get("id") == v_id),
+        info["entries"][0].get("title", ""),
+    )
+
+    chosen_entry = None
+    for entry in info["entries"]:
+        cand_id = entry.get("id")
+        if cand_id and cand_id != v_id and cand_id not in hist_set:
+            cand_title = entry.get("title", "")
+            if current_title and cand_title:
+                sim = SequenceMatcher(None, current_title, cand_title).ratio()
+                if sim > 0.55:
+                    continue
+            chosen_entry = entry
+            break
+
+    if not chosen_entry:
+        for entry in info["entries"]:
+            cand_id = entry.get("id")
+            if cand_id and cand_id != v_id:
+                chosen_entry = entry
+                break
+
+    if not chosen_entry:
+        raise HTTPException(status_code=404, detail="Could not select next autoplay track.")
+
+    next_id = chosen_entry.get("id")
+    dur_sec = int(chosen_entry.get("duration", 0) or 0)
+    thumb = ""
+    if chosen_entry.get("thumbnails"):
+        thumb = chosen_entry["thumbnails"][-1].get("url", "")
+    elif chosen_entry.get("thumbnail"):
+        thumb = chosen_entry.get("thumbnail")
+
+    return {
+        "status": True,
+        "id": next_id,
+        "title": chosen_entry.get("title", "YouTube Track"),
+        "duration": format_duration(dur_sec),
+        "duration_sec": dur_sec,
+        "channel_name": chosen_entry.get("uploader", "") or chosen_entry.get("channel", ""),
+        "thumbnail": thumb or f"https://img.youtube.com/vi/{next_id}/hqdefault.jpg",
+        "url": f"https://www.youtube.com/watch?v={next_id}",
     }
 
 
