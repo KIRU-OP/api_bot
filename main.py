@@ -63,19 +63,29 @@ async def fetch_cookies():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Initialize MongoDB
-    await db.init_db()
+    # Initialize services in background so Uvicorn can immediately bind to $PORT for Railway health check
+    async def _init_services():
+        try:
+            await db.init_db()
+        except Exception as exc:
+            logger.error("Database initialization failed: %s", exc)
 
-    # 2. Fetch/load cookies
-    await fetch_cookies()
+        try:
+            await fetch_cookies()
+        except Exception as exc:
+            logger.error("Cookies fetch failed: %s", exc)
 
-    # 3. Start Telegram Bot if BOT_TOKEN is present
-    await start_telegram_bot()
+        try:
+            await start_telegram_bot()
+        except Exception as exc:
+            logger.error("Telegram bot start failed: %s", exc)
 
-    logger.info("AnonXStreamAPI started successfully.")
+    init_task = asyncio.create_task(_init_services())
+    logger.info("AnonXStreamAPI port ready for incoming traffic.")
     yield
 
     # Shutdown
+    init_task.cancel()
     await stop_telegram_bot()
     logger.info("Shutting down AnonXStreamAPI...")
 

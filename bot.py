@@ -277,6 +277,11 @@ async def start_telegram_bot():
 
 async def stop_telegram_bot():
     global bot_instance, dp_instance, bot_task
+    if dp_instance:
+        try:
+            await dp_instance.stop_polling()
+        except Exception:
+            pass
     if bot_task:
         bot_task.cancel()
         try:
@@ -284,5 +289,9 @@ async def stop_telegram_bot():
         except asyncio.CancelledError:
             pass
     if bot_instance:
-        await bot_instance.session.close()
+        try:
+            await bot_instance.session.close()
+        except Exception:
+            pass
         logger.info("Telegram Bot stopped.")
+
